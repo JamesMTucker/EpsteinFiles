@@ -1,0 +1,21 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "epstein-files"
+version = "1.0.0"
+description = "Scraper and downloader for DOJ Epstein Files disclosures"
+requires-python = ">=3.13"
+dependencies = [
+    "click>=8.1",
+    "selenium>=4.27",
+    "beautifulsoup4>=4.12",
+    "requests>=2.31",
+]
+
+[project.scripts]
+epstein-files = "epstein_files.cli:cli"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/epstein_files"]
