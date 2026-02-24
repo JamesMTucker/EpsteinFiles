@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+*.egg
+.eggs/
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Hatch
+.hatch/
+
+# Project-specific: downloaded data and output
+data/
+output/
+
+# Claude
+.claude/
+
+# OS
+.DS_Store
+Thumbs.db
