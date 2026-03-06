@@ -49,6 +49,7 @@ class Database:
                 filename TEXT NOT NULL,
                 discovered_at TEXT NOT NULL,
                 scrape_run_id INTEGER REFERENCES scrape_runs(id),
+                last_seen_run_id INTEGER REFERENCES scrape_runs(id),
                 download_status TEXT NOT NULL DEFAULT 'pending',
                 downloaded_at TEXT,
                 file_size INTEGER,
@@ -73,6 +74,12 @@ class Database:
         """)
         self.conn.commit()
 
+        # Migration: add last_seen_run_id to existing databases
+        cols = {row[1] for row in self.conn.execute("PRAGMA table_info(pdf_files)").fetchall()}
+        if "last_seen_run_id" not in cols:
+            self.conn.execute("ALTER TABLE pdf_files ADD COLUMN last_seen_run_id INTEGER REFERENCES scrape_runs(id)")
+            self.conn.commit()
+
     def start_scrape_run(self, dataset: int | None = None) -> int:
         """Start a new scrape run and return its ID."""
         now = datetime.now(timezone.utc).isoformat()
@@ -93,14 +100,20 @@ class Database:
         self.conn.commit()
 
     def upsert_pdf(self, url: str, dataset: int, filename: str, scrape_run_id: int) -> bool:
-        """Insert a PDF URL if not already known. Returns True if newly inserted."""
+        """Insert a PDF URL if not already known; update last_seen_run_id if it is. Returns True if newly inserted."""
         now = datetime.now(timezone.utc).isoformat()
         cur = self.conn.execute(
-            "INSERT OR IGNORE INTO pdf_files (url, dataset, filename, discovered_at, scrape_run_id) VALUES (?, ?, ?, ?, ?)",
-            (url, dataset, filename, now, scrape_run_id),
+            "INSERT OR IGNORE INTO pdf_files (url, dataset, filename, discovered_at, scrape_run_id, last_seen_run_id) VALUES (?, ?, ?, ?, ?, ?)",
+            (url, dataset, filename, now, scrape_run_id, scrape_run_id),
         )
+        is_new = cur.rowcount > 0
+        if not is_new:
+            self.conn.execute(
+                "UPDATE pdf_files SET last_seen_run_id=? WHERE url=?",
+                (scrape_run_id, url),
+            )
         self.conn.commit()
-        return cur.rowcount > 0
+        return is_new
 
     def get_pending_downloads(self, dataset: int | None = None) -> list[PdfFile]:
         """Get all URLs with pending download status."""
@@ -199,6 +212,44 @@ class Database:
                     status.pending = count
 
         return [datasets[ds] for ds in sorted(datasets)]
+
+    def get_new_files(self, run_id: int, dataset: int | None = None) -> list[PdfFile]:
+        """Return URLs first discovered in the given scrape run."""
+        if dataset is not None:
+            rows = self.conn.execute(
+                "SELECT url, dataset, filename, download_status FROM pdf_files WHERE scrape_run_id=? AND dataset=? ORDER BY id",
+                (run_id, dataset),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT url, dataset, filename, download_status FROM pdf_files WHERE scrape_run_id=? ORDER BY id",
+                (run_id,),
+            ).fetchall()
+        return [PdfFile(url=r["url"], dataset=r["dataset"], filename=r["filename"], download_status=r["download_status"]) for r in rows]
+
+    def get_removed_files(self, run_id: int, dataset: int | None = None) -> list[PdfFile]:
+        """Return URLs not seen in the given scrape run (potentially removed from site).
+
+        Excludes files already marked not_found (known-gone from a prior download attempt).
+        """
+        if dataset is not None:
+            rows = self.conn.execute(
+                """SELECT url, dataset, filename, download_status FROM pdf_files
+                   WHERE last_seen_run_id != ? AND last_seen_run_id IS NOT NULL
+                   AND download_status != 'not_found'
+                   AND dataset=?
+                   ORDER BY id""",
+                (run_id, dataset),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                """SELECT url, dataset, filename, download_status FROM pdf_files
+                   WHERE last_seen_run_id != ? AND last_seen_run_id IS NOT NULL
+                   AND download_status != 'not_found'
+                   ORDER BY id""",
+                (run_id,),
+            ).fetchall()
+        return [PdfFile(url=r["url"], dataset=r["dataset"], filename=r["filename"], download_status=r["download_status"]) for r in rows]
 
     def upsert_extra_file(self, url: str, subdir: str, filename: str):
         """Insert an extra file if not already known."""
