@@ -154,6 +154,67 @@ def status(ctx, dataset):
         db.close()
 
 
+@cli.command()
+@click.option("--dataset", "-d", type=int, default=None, help="Diff only this dataset number (1-12).")
+@click.pass_context
+def diff(ctx, dataset):
+    """Scrape the site and report new and missing files compared to previous runs."""
+    output_dir = ctx.obj["output_dir"]
+    db = Database(output_dir)
+    db.initialize()
+
+    run_id = db.start_scrape_run(dataset=dataset)
+
+    print("=" * 60)
+    if dataset:
+        print(f"Scraping Data Set {dataset} for diff...")
+    else:
+        print("Scraping all 12 data sets for diff...")
+    print("=" * 60)
+    sys.stdout.flush()
+
+    browser = BrowserManager()
+    try:
+        browser.start()
+        scraper = Scraper(db, browser)
+
+        if dataset:
+            pages, urls = scraper.scrape_dataset(dataset, run_id)
+        else:
+            pages, urls = scraper.scrape_all(run_id)
+
+        db.finish_scrape_run(run_id, pages_scraped=pages, urls_discovered=urls)
+    except Exception as e:
+        db.finish_scrape_run(run_id, pages_scraped=0, urls_discovered=0, status="failed")
+        print(f"\nScrape failed: {e}", file=sys.stderr)
+        sys.exit(1)
+    finally:
+        browser.quit()
+
+    try:
+        new_files = db.get_new_files(run_id, dataset=dataset)
+        removed_files = db.get_removed_files(run_id, dataset=dataset)
+
+        print(f"\n{'=' * 60}")
+        print(f"Change Report (Run #{run_id})")
+        print(f"{'=' * 60}")
+        print(f"  NEW files found:  {len(new_files):>6}")
+        print(f"  MISSING files:    {len(removed_files):>6}")
+
+        if new_files:
+            print(f"\nNEW ({len(new_files)}):")
+            for f in new_files:
+                print(f"  DataSet {f.dataset} - {f.filename}")
+
+        if removed_files:
+            print(f"\nMISSING ({len(removed_files)}):")
+            for f in removed_files:
+                note = f"  [{f.download_status}]" if f.download_status != "pending" else ""
+                print(f"  DataSet {f.dataset} - {f.filename}{note}")
+    finally:
+        db.close()
+
+
 class DatasetStatusTotals:
     def __init__(self):
         self.discovered = 0
